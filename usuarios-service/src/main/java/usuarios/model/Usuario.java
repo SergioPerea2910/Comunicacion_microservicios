@@ -16,6 +16,10 @@ public class Usuario {
 
     private String nombre;
 
+    public Usuario() {
+        // Constructor sin argumentos requerido por JPA
+    }
+
     public Usuario(int id, String nombre) {
         this.id = id;
         this.nombre = nombre;
