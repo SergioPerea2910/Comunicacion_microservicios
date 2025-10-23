@@ -1,49 +1,53 @@
 pipeline {
-    agent any
+  agent any
 
-    environment {
-        REGISTRY = 'docker.io/rojassluu'
-        TAG = 'latest'
+  environment {
+    REGISTRY    = 'docker.io'
+    REGISTRY_NS = 'rojassluu'
+    IMAGE_TAG   = 'latest'        // cámbialo a "${BUILD_NUMBER}" si prefieres
+    DOCKER_CREDS_ID = 'dockerhub-creds'
+  }
+
+  stages {
+    // Si creas el job como "Pipeline script from SCM", Jenkins hace el checkout automáticamente.
+
+    stage('Docker login') {
+      steps {
+        withCredentials([usernamePassword(
+          credentialsId: "${DOCKER_CREDS_ID}",
+          usernameVariable: 'DOCKER_USER',
+          passwordVariable: 'DOCKER_PASS'
+        )]) {
+          sh '''
+            echo "$DOCKER_PASS" | docker login -u "$DOCKER_USER" --password-stdin
+          '''
+        }
+      }
     }
 
-    stages {
-        stage('Checkout') {
-            steps {
-                git branch: 'main', url: 'https://github.com/SergioPerea2910/Comunicacion_microservicios.git'
-            }
-        }
-
-        stage('Build Docker Images') {
-            steps {
-                sh '''
-                    docker build -t $REGISTRY/gateway-service:$TAG ./gateway-service
-                    docker build -t $REGISTRY/pedidos-service:$TAG ./pedidos-service
-                    docker build -t $REGISTRY/usuarios-service:$TAG ./usuarios-service
-                '''
-            }
-        }
-
-        stage('Push to DockerHub') {
-            steps {
-                withCredentials([usernamePassword(credentialsId: 'dockerhub-creds', usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
-                    sh '''
-                        echo $DOCKER_PASS | docker login -u $DOCKER_USER --password-stdin
-                        docker push $REGISTRY/gateway-service:$TAG
-                        docker push $REGISTRY/pedidos-service:$TAG
-                        docker push $REGISTRY/usuarios-service:$TAG
-                    '''
-                }
-            }
-        }
-
-        stage('Deploy to Kubernetes') {
-            steps {
-                sh '''
-                    helm upgrade --install gateway ./helm/gateway
-                    helm upgrade --install pedidos ./helm/pedidos
-                    helm upgrade --install usuarios ./helm/usuarios
-                '''
-            }
-        }
+    stage('Build images') {
+      steps {
+        sh """
+          docker build -t ${REGISTRY}/${REGISTRY_NS}/gateway-service:${IMAGE_TAG}   ./gateway-service
+          docker build -t ${REGISTRY}/${REGISTRY_NS}/pedidos-service:${IMAGE_TAG}   ./pedidos-service
+          docker build -t ${REGISTRY}/${REGISTRY_NS}/usuarios-service:${IMAGE_TAG}  ./usuarios-service
+        """
+      }
     }
+
+    stage('Push images') {
+      steps {
+        sh """
+          docker push ${REGISTRY}/${REGISTRY_NS}/gateway-service:${IMAGE_TAG}
+          docker push ${REGISTRY}/${REGISTRY_NS}/pedidos-service:${IMAGE_TAG}
+          docker push ${REGISTRY}/${REGISTRY_NS}/usuarios-service:${IMAGE_TAG}
+        """
+      }
+    }
+  }
+
+  post {
+    success { echo "OK: pushed tag ${IMAGE_TAG} a ${REGISTRY_NS}" }
+    failure { echo "Falló el pipeline (revisa la etapa en rojo)." }
+  }
 }
