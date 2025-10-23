@@ -2,7 +2,7 @@ pipeline {
     agent any
 
     environment {
-        REGISTRY = 'docker.io/lurojasy'
+        REGISTRY = 'docker.io/rojassluu'
         TAG = 'latest'
     }
 
