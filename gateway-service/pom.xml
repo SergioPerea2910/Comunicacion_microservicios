@@ -21,11 +21,20 @@
     </properties>
 
     <dependencies>
+        <!-- Dependencia principal para servicios WebFlux (API Gateway con Spring Cloud) -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-webflux</artifactId>
         </dependency>
 
+        <!-- Starter de pruebas unitarias con JUnit 5, Mockito, etc. -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+        <!-- Starter para usar Spring Cloud Gateway (si tu proyecto lo usa) -->
         <dependency>
             <groupId>org.springframework.cloud</groupId>
             <artifactId>spring-cloud-starter-gateway</artifactId>

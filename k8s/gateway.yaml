@@ -1,0 +1,14 @@
+env:
+  - name: USUARIOS_URL
+    value: http://usuarios.microservicios.svc.cluster.local:8080
+  - name: PEDIDOS_URL
+    value: http://pedidos.microservicios.svc.cluster.local:8080
+---
+# Service del gateway tipo NodePort para poder acceder desde tu PC
+apiVersion: v1
+kind: Service
+metadata: { name: gateway, namespace: microservicios }
+spec:
+  selector: { app: gateway }
+  ports: [{ port: 8080, targetPort: 8080 }]
+  type: NodePort

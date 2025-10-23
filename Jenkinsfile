@@ -1,175 +1,111 @@
 pipeline {
-  agent any
-  options { timestamps() }
-
-  // Disparadores
-  triggers {
-    githubPush()              // webhook GitHub (ngrok)
-    // pollSCM('H/5 * * * *') // opcional: respaldo por polling
+  agent {
+    kubernetes {
+      cloud 'kubernetes'
+      defaultContainer 'jnlp'
+      yaml """
+apiVersion: v1
+kind: Pod
+spec:
+  serviceAccountName: jenkins
+  containers:
+  - name: kaniko
+    image: gcr.io/kaniko-project/executor:v1.23.0
+    args: ['sleep','infinity']
+    volumeMounts:
+    - name: docker-config
+      mountPath: /kaniko/.docker
+  - name: kubectl
+    image: bitnami/kubectl:latest
+    command: ['sleep','infinity']
+  volumes:
+  - name: docker-config
+    projected:
+      sources:
+      - secret:
+          name: dockerhub-creds-json
+"""
+    }
   }
 
+  triggers { githubPush() }     // dispara con cada push
+  options  { timestamps() }
+
   environment {
-    // Registry
-    REGISTRY        = 'docker.io'
-    REGISTRY_NS     = 'rojassluu'
-    DOCKER_CREDS_ID = 'dockerhub-creds'
-
-    // Tag de build: SHA corto del commit (y también publicamos 'latest')
-    COMMIT_SHA      = "${env.GIT_COMMIT?.take(7) ?: 'dev'}"
-    IMAGE_TAG       = "${COMMIT_SHA}"
-
-    // Puertos host (los contenedores escuchan 8080 dentro)
-    PORT_USUARIOS   = '8082'
-    PORT_PEDIDOS    = '8081'
-    PORT_GATEWAY    = '8083'
-
-    // Nombres de contenedor
-    C_USUARIOS      = 'usuarios'
-    C_PEDIDOS       = 'pedidos'
-    C_GATEWAY       = 'gateway'
-
-    // Red Docker para comunicación interna
-    NET_NAME        = 'ms_net'
+    REGISTRY    = 'docker.io'
+    REGISTRY_NS = 'rojassluu'           // <-- cambia si es otro namespace en Docker Hub
+    APP_NS      = 'microservicios'
+    IMAGE_TAG   = "${env.GIT_COMMIT?.take(7) ?: 'dev'}"
   }
 
   stages {
-    stage('Checkout') {
-      steps { checkout scm }
-    }
+    stage('Checkout'){ steps { checkout scm } }
 
-    stage('Docker login') {
+    stage('Docker auth secret (para Kaniko)') {
       steps {
-        withCredentials([usernamePassword(
-          credentialsId: "${DOCKER_CREDS_ID}",
-          usernameVariable: 'DOCKER_USER',
-          passwordVariable: 'DOCKER_PASS'
-        )]) {
+        withCredentials([usernamePassword(credentialsId: 'dockerhub-creds',
+                           usernameVariable: 'DH_USER', passwordVariable: 'DH_PASS')]) {
           sh '''
-            set -eux
-            echo "$DOCKER_PASS" | docker login -u "$DOCKER_USER" --password-stdin
+            kubectl -n jenkins delete secret dockerhub-creds-json --ignore-not-found
+            kubectl -n jenkins create secret docker-registry dockerhub-creds-json \
+              --docker-server=https://index.docker.io/v1/ \
+              --docker-username="$DH_USER" \
+              --docker-password="$DH_PASS" \
+              --docker-email="no-reply@example.com"
           '''
         }
       }
     }
 
-    // ---------- BUILD ----------
-    // Asume que hay un Dockerfile en:
-    // ./gateway-service, ./pedidos-service, ./usuarios-service
-    stage('Build images') {
+    stage('Build & Push (Kaniko)') {
       steps {
-        sh '''
-          set -eux
-
-          docker build -t ${REGISTRY}/${REGISTRY_NS}/gateway-service:${IMAGE_TAG}   ./gateway-service
-          docker build -t ${REGISTRY}/${REGISTRY_NS}/pedidos-service:${IMAGE_TAG}   ./pedidos-service
-          docker build -t ${REGISTRY}/${REGISTRY_NS}/usuarios-service:${IMAGE_TAG}  ./usuarios-service
-
-          # Etiqueta adicional 'latest'
-          for svc in gateway-service pedidos-service usuarios-service; do
-            docker tag ${REGISTRY}/${REGISTRY_NS}/$svc:${IMAGE_TAG} ${REGISTRY}/${REGISTRY_NS}/$svc:latest
-          done
-
-          docker images | grep ${REGISTRY_NS} || true
-        '''
+        container('kaniko') {
+          sh '''
+            set -eux
+            build () {
+              ctx="$1"; img="$2"
+              /kaniko/executor \
+                --context="${ctx}" --dockerfile="${ctx}/Dockerfile" \
+                --destination ${REGISTRY}/${REGISTRY_NS}/${img}:${IMAGE_TAG} \
+                --destination ${REGISTRY}/${REGISTRY_NS}/${img}:latest \
+                --cache=true
+            }
+            build gateway-service  gateway-service
+            build pedidos-service  pedidos-service
+            build usuarios-service usuarios-service
+          '''
+        }
       }
     }
 
-    // ---------- PUSH ----------
-    stage('Push images') {
+    stage('Deploy a Minikube') {
       steps {
-        sh '''
-          set -eux
-          for svc in gateway-service pedidos-service usuarios-service; do
-            docker push ${REGISTRY}/${REGISTRY_NS}/$svc:${IMAGE_TAG}
-            docker push ${REGISTRY}/${REGISTRY_NS}/$svc:latest
-          done
-        '''
-      }
-    }
+        container('kubectl') {
+          sh '''
+            set -eux
+            kubectl apply -f k8s/namespace.yaml
+            kubectl apply -f k8s/usuarios.yaml
+            kubectl apply -f k8s/pedidos.yaml
+            kubectl apply -f k8s/gateway.yaml
 
-    // ---------- DEPLOY CONTINUO (sin zero-downtime) ----------
-    // Requiere Jenkins con acceso al Docker host:
-    // -v /var/run/docker.sock:/var/run/docker.sock  y  --privileged
-    stage('Deploy (Docker local) - Continuous') {
-      when { branch 'main' }   // despliega solo en main
-      steps {
-        sh '''
-          set -euo pipefail
+            kubectl -n ${APP_NS} set image deploy/usuarios usuarios=${REGISTRY}/${REGISTRY_NS}/usuarios-service:${IMAGE_TAG}
+            kubectl -n ${APP_NS} set image deploy/pedidos  pedidos=${REGISTRY}/${REGISTRY_NS}/pedidos-service:${IMAGE_TAG}
+            kubectl -n ${APP_NS} set image deploy/gateway  gateway=${REGISTRY}/${REGISTRY_NS}/gateway-service:${IMAGE_TAG}
 
-          DEPLOY_TAG="${IMAGE_TAG:-latest}"   # o fuerza "latest" si prefieres
+            kubectl -n ${APP_NS} rollout status deploy/usuarios
+            kubectl -n ${APP_NS} rollout status deploy/pedidos
+            kubectl -n ${APP_NS} rollout status deploy/gateway
 
-          # 1) Red común
-          docker network create "${NET_NAME}" >/dev/null 2>&1 || true
-
-          # helper: parar/eliminar y volver a crear
-          recreate() {
-            local name="$1"; shift
-            docker ps -a --filter "name=^${name}$" --format "{{.ID}}" | xargs -r docker stop
-            docker ps -a --filter "name=^${name}$" --format "{{.ID}}" | xargs -r docker rm
-            docker run -d --name "${name}" --network "${NET_NAME}" "$@"
-          }
-
-          # helper: healthcheck con reintentos
-          hc() {
-            local url="$1"
-            for i in $(seq 1 25); do
-              if curl -fsS "${url}" >/dev/null 2>&1; then
-                echo "OK ${url}"
-                return 0
-              fi
-              echo "Esperando ${url} (${i}/25) ..."
-              sleep 1
-            done
-            echo "FALLO healthcheck: ${url}" >&2
-            return 1
-          }
-
-          echo "=== Deploy continuo con tag ${DEPLOY_TAG} ==="
-
-          # 2) USUARIOS (host:${PORT_USUARIOS} -> cont:8080)
-          docker pull ${REGISTRY}/${REGISTRY_NS}/usuarios-service:${DEPLOY_TAG}
-          recreate "${C_USUARIOS}" -p ${PORT_USUARIOS}:8080 \
-            ${REGISTRY}/${REGISTRY_NS}/usuarios-service:${DEPLOY_TAG}
-          hc "http://localhost:${PORT_USUARIOS}/actuator/health" || exit 1
-
-          # 3) PEDIDOS (host:${PORT_PEDIDOS} -> cont:8080)
-          docker pull ${REGISTRY}/${REGISTRY_NS}/pedidos-service:${DEPLOY_TAG}
-          recreate "${C_PEDIDOS}" -p ${PORT_PEDIDOS}:8080 \
-            ${REGISTRY}/${REGISTRY_NS}/pedidos-service:${DEPLOY_TAG}
-          hc "http://localhost:${PORT_PEDIDOS}/actuator/health" || exit 1
-
-          # 4) GATEWAY (host:${PORT_GATEWAY} -> cont:8080)
-          docker pull ${REGISTRY}/${REGISTRY_NS}/gateway-service:${DEPLOY_TAG}
-          recreate "${C_GATEWAY}" -p ${PORT_GATEWAY}:8080 \
-            -e USUARIOS_URL=http://${C_USUARIOS}:8080 \
-            -e PEDIDOS_URL=http://${C_PEDIDOS}:8080 \
-            ${REGISTRY}/${REGISTRY_NS}/gateway-service:${DEPLOY_TAG}
-          hc "http://localhost:${PORT_GATEWAY}/actuator/health" || exit 1
-
-          echo "=== Contenedores desplegados ==="
-          docker ps --format "table {{.Names}}\\t{{.Image}}\\t{{.Ports}}\\t{{.Status}}"
-        '''
-      }
-    }
-
-    // (opcional) Smoke rápido vía gateway
-    stage('Smoke tests') {
-      when { branch 'main' }
-      steps {
-        sh '''
-          set -eux
-          curl -fsS http://localhost:${PORT_GATEWAY}/actuator/health >/dev/null
-          # Ajusta paths reales si quieres probar endpoints de negocio:
-          # curl -fsS http://localhost:${PORT_GATEWAY}/api/usuarios >/dev/null || true
-          # curl -fsS http://localhost:${PORT_GATEWAY}/api/pedidos  >/dev/null || true
-        '''
+            echo "URL Gateway:"
+            minikube service gateway -n ${APP_NS} --url || true
+          '''
+        }
       }
     }
   }
 
   post {
-    always  { sh 'docker logout || true' }
-    success { echo "OK: Build/Push/Deploy completado. Tag ${IMAGE_TAG} + latest publicados." }
-    failure { echo "Falló el pipeline. Revisa la etapa marcada en rojo." }
+    success { echo "✅ Build & Deploy OK — tag ${IMAGE_TAG}" }
+    failure { echo "❌ Falló el pipeline (revisa la etapa en rojo)" }
   }
 }
