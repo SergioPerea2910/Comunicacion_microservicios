@@ -1,33 +1,20 @@
 pipeline {
   agent any
-
-  options {
-    timestamps()
-  }
+  options { timestamps() }
 
   triggers {
-    // Usa webhook de GitHub/GitLab si puedes:
-    githubPush()            // -> GitHub
-    // gitlabPush()         // -> GitLab (si usas GitLab)
-    // Como respaldo (si no hay webhook), descomenta un poll cada 2 min:
-    // pollSCM('H/2 * * * *')
+    githubPush()               // disparo por Webhook (tu ngrok)
   }
 
   environment {
     REGISTRY        = 'docker.io'
     REGISTRY_NS     = 'rojassluu'
-    IMAGE_TAG       = 'latest'            // o "${BUILD_NUMBER}" o un SHA corto (ver nota abajo)
-    DOCKER_CREDS_ID = 'dockerhub-creds'   // ID en Jenkins > Credentials
+    IMAGE_TAG       = 'latest'   // o "${env.GIT_COMMIT.take(7)}"
+    DOCKER_CREDS_ID = 'dockerhub-creds'
   }
 
   stages {
-    stage('Checkout') {
-      steps {
-        // Si tu job es "Pipeline from SCM", Jenkins hace checkout solo.
-        // Lo dejo para jobs tipo "Pipeline script".
-        checkout scm
-      }
-    }
+    stage('Checkout') { steps { checkout scm } }
 
     stage('Docker login') {
       steps {
@@ -46,36 +33,54 @@ pipeline {
 
     stage('Build images') {
       steps {
-        sh """
+        sh '''
           set -eux
-          docker build -t ${REGISTRY}/${REGISTRY_NS}/gateway-service:${IMAGE_TAG}   ./gateway-service
-          docker build -t ${REGISTRY}/${REGISTRY_NS}/pedidos-service:${IMAGE_TAG}   ./pedidos-service
-          docker build -t ${REGISTRY}/${REGISTRY_NS}/usuarios-service:${IMAGE_TAG}  ./usuarios-service
-        """
+          for svc in gateway-service pedidos-service usuarios-service; do
+            docker build -t ${REGISTRY}/${REGISTRY_NS}/$svc:${IMAGE_TAG} ./$svc
+          done
+        '''
       }
     }
 
     stage('Push images') {
       steps {
-        sh """
+        sh '''
           set -eux
-          docker push ${REGISTRY}/${REGISTRY_NS}/gateway-service:${IMAGE_TAG}
-          docker push ${REGISTRY}/${REGISTRY_NS}/pedidos-service:${IMAGE_TAG}
-          docker push ${REGISTRY}/${REGISTRY_NS}/usuarios-service:${IMAGE_TAG}
-        """
+          for svc in gateway-service pedidos-service usuarios-service; do
+            docker push ${REGISTRY}/${REGISTRY_NS}/$svc:${IMAGE_TAG}
+          done
+        '''
+      }
+    }
+
+    // 🔥 Despliegue local en Docker (pull + recreate contenedores)
+    stage('Deploy (local Docker)') {
+      when { branch 'main' }   // deploy solo en main (ajusta si quieres)
+      steps {
+        sh '''
+          set -eux
+          # ejemplo: recrear gateway-service
+          docker rm -f gateway || true
+          docker pull ${REGISTRY}/${REGISTRY_NS}/gateway-service:${IMAGE_TAG}
+          docker run -d --name gateway -p 8083:8080 \
+            ${REGISTRY}/${REGISTRY_NS}/gateway-service:${IMAGE_TAG}
+
+          # idem para pedidos-service y usuarios-service (ajusta puertos)
+          docker rm -f pedidos || true
+          docker pull ${REGISTRY}/${REGISTRY_NS}/pedidos-service:${IMAGE_TAG}
+          docker run -d --name pedidos -p 8081:8080 \
+            ${REGISTRY}/${REGISTRY_NS}/pedidos-service:${IMAGE_TAG}
+
+          docker rm -f usuarios || true
+          docker pull ${REGISTRY}/${REGISTRY_NS}/usuarios-service:${IMAGE_TAG}
+          docker run -d --name usuarios -p 8082:8080 \
+            ${REGISTRY}/${REGISTRY_NS}/usuarios-service:${IMAGE_TAG}
+        '''
       }
     }
   }
 
   post {
-    always {
-      sh 'docker logout || true'
-    }
-    success {
-      echo "OK: pushed tag ${IMAGE_TAG} a ${REGISTRY_NS}"
-    }
-    failure {
-      echo "Falló el pipeline (revisa la etapa en rojo)."
-    }
+    always { sh 'docker logout || true' }
   }
 }

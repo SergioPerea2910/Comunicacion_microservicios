@@ -1,0 +1,28 @@
+# docker-compose.yml
+version: "3.9"
+services:
+  usuarios:
+    image: rojassluu/usuarios-service:latest
+    container_name: usuarios
+    ports: ["8082:8080"]
+    networks: [ms_net]
+
+  pedidos:
+    image: rojassluu/pedidos-service:latest
+    container_name: pedidos
+    ports: ["8081:8080"]
+    networks: [ms_net]
+
+  gateway:
+    image: rojassluu/gateway-service:latest
+    container_name: gateway
+    ports: ["8083:8080"]
+    environment:
+      USUARIOS_URL: "http://usuarios:8080"
+      PEDIDOS_URL: "http://pedidos:8080"
+    depends_on: [usuarios, pedidos]
+    networks: [ms_net]
+
+networks:
+  ms_net:
+    driver: bridge
