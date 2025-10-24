@@ -1,28 +1,41 @@
 pipeline {
   agent {
     kubernetes {
-      cloud 'kubernetes'
-      defaultContainer 'jnlp'
+      label 'linux'
+      defaultContainer 'maven'
       yaml """
 apiVersion: v1
 kind: Pod
+metadata:
+  labels:
+    jenkins/label: jenkins-jenkins-agent
 spec:
-  serviceAccountName: jenkins
+  serviceAccountName: default
   containers:
+    - name: maven
+      image: maven:3.9.9-eclipse-temurin-17
+      command:
+        - cat
+      tty: true
+      volumeMounts:
+        - name: m2-cache
+          mountPath: /root/.m2
     - name: kaniko
       image: gcr.io/kaniko-project/executor:debug
+      command:
+        - /busybox/sh
+        - -c
+      args:
+        - "sleep 365d"
       env:
         - name: DOCKER_CONFIG
           value: /kaniko/.docker
-      command: ["/busybox/sh","-c"]
-      args: ["sleep infinity"]
       volumeMounts:
         - name: docker-config
           mountPath: /kaniko/.docker
-    - name: kubectl
-      image: bitnami/kubectl:latest
-      command: ["sleep","infinity"]
   volumes:
+    - name: m2-cache
+      emptyDir: {}
     - name: docker-config
       projected:
         sources:
@@ -35,91 +48,117 @@ spec:
     }
   }
 
-  // Usa pollSCM mientras el webhook no esté 100% operativo
-  triggers { pollSCM('H/2 * * * *') }
-
   environment {
-    REGISTRY     = 'docker.io'
-    REGISTRY_NS  = 'rojassluu'          // tu cuenta DockerHub
-    APP_NS       = 'microservicios'
-    IMAGE_TAG    = "${env.GIT_COMMIT?.take(7) ?: 'dev'}"
+    // >>> CAMBIA ESTO <<<
+    DOCKER_REGISTRY = 'docker.io/tuusuario' // p.ej. docker.io/tuusuario ó ghcr.io/tuorg
+    IMAGE_NAME      = 'comunicacion-microservicios'
+    IMAGE_TAG       = "${env.BUILD_NUMBER}"
+  }
+
+  options {
+    buildDiscarder(logRotator(numToKeepStr: '10'))
+    timeout(time: 30, unit: 'MINUTES')
+    skipStagesAfterUnstable()
+    disableConcurrentBuilds()
+  }
+
+  triggers {
+    // Revisa cambios cada 5 minutos (opcional, si no usas webhooks)
+    pollSCM('H/5 * * * *')
   }
 
   stages {
     stage('Checkout') {
       steps {
+        echo "🚀 Iniciando pipeline: ${env.JOB_NAME} #${env.BUILD_NUMBER}"
         checkout scm
+        sh 'git log -1 --oneline || true'
       }
     }
 
-    stage('Build & Push (gateway)') {
+    stage('Build (Maven)') {
+      steps {
+        container('maven') {
+          sh '''
+            echo "Java:"
+            java -version
+            echo "Maven:"
+            mvn -v
+
+            # Compila y reempaqueta el JAR ejecutable
+            mvn -B -DskipTests clean package spring-boot:repackage
+
+            echo "Contenido de target/:"
+            ls -lah target || true
+          '''
+        }
+      }
+    }
+
+    stage('Archive artifact') {
+      steps {
+        archiveArtifacts artifacts: 'target/*.jar,**/target/*.jar', excludes: '**/*.original', fingerprint: true
+      }
+    }
+
+    stage('Docker Build & Push (Kaniko)') {
+      when {
+        anyOf {
+          branch 'main'
+          branch 'master'
+          branch 'develop'
+        }
+        expression { fileExists('Dockerfile') }
+      }
       steps {
         container('kaniko') {
           sh '''
-            set -eux
+            echo "🐳 Construyendo y publicando imagen con Kaniko..."
             /kaniko/executor \
-              --verbosity=debug \
-              --context="gateway-service" \
-              --dockerfile="gateway-service/Dockerfile" \
-              --destination ${REGISTRY}/${REGISTRY_NS}/gateway-service:${IMAGE_TAG} \
-              --destination ${REGISTRY}/${REGISTRY_NS}/gateway-service:latest \
-              --cache=true
+              --context "${WORKSPACE}" \
+              --dockerfile "${WORKSPACE}/Dockerfile" \
+              --destination "${DOCKER_REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG}" \
+              --destination "${DOCKER_REGISTRY}/${IMAGE_NAME}:latest" \
+              --snapshotMode=redo \
+              --use-new-run
           '''
         }
       }
     }
 
-    stage('Deploy (gateway)') {
+    stage('Deploy to Production') {
+      when {
+        branch 'main'
+      }
       steps {
-        container('kubectl') {
-          sh '''
-            set -eux
-            kubectl create ns ${APP_NS} --dry-run=client -o yaml | kubectl apply -f -
-            kubectl apply -f k8s/namespace.yaml || true
-            kubectl apply -f k8s/gateway.yaml
-
-            kubectl -n ${APP_NS} set image deploy/gateway \
-              gateway=${REGISTRY}/${REGISTRY_NS}/gateway-service:${IMAGE_TAG}
-
-            kubectl -n ${APP_NS} rollout status deploy/gateway --timeout=120s
-            echo "URL Gateway:"
-            minikube service gateway -n ${APP_NS} --url || true
-          '''
+        script {
+          timeout(time: 10, unit: 'MINUTES') {
+            input message: '¿Desplegar a producción?', ok: 'Desplegar', submitterParameter: 'DEPLOYER'
+          }
+          echo "🚀 Desplegando a Producción... (desplegado por: ${env.DEPLOYER})"
+          // sh './deploy-production.sh'
+          echo "✅ Aplicación desplegada en producción"
         }
       }
     }
-
-    // Descomenta cuando gateway funcione
-    // stage('Build & Push (resto)') {
-    //   steps {
-    //     container('kaniko') {
-    //       sh '''
-    //         set -eux
-    //         /kaniko/executor --context="pedidos-service"  --dockerfile="pedidos-service/Dockerfile"  --destination ${REGISTRY}/${REGISTRY_NS}/pedidos-service:${IMAGE_TAG}  --destination ${REGISTRY}/${REGISTRY_NS}/pedidos-service:latest  --cache=true
-    //         /kaniko/executor --context="usuarios-service" --dockerfile="usuarios-service/Dockerfile" --destination ${REGISTRY}/${REGISTRY_NS}/usuarios-service:${IMAGE_TAG} --destination ${REGISTRY}/${REGISTRY_NS}/usuarios-service:latest --cache=true
-    //       '''
-    //     }
-    //   }
-    // }
-    // stage('Deploy (resto)') {
-    //   steps {
-    //     container('kubectl') {
-    //       sh '''
-    //         set -eux
-    //         kubectl apply -f k8s/pedidos.yaml
-    //         kubectl apply -f k8s/usuarios.yaml
-    //         kubectl -n ${APP_NS} set image deploy/pedidos  pedidos=${REGISTRY}/${REGISTRY_NS}/pedidos-service:${IMAGE_TAG}
-    //         kubectl -n ${APP_NS} set image deploy/usuarios usuarios=${REGISTRY}/${REGISTRY_NS}/usuarios-service:${IMAGE_TAG}
-    //         kubectl -n ${APP_NS} rollout status deploy/pedidos
-    //         kubectl -n ${APP_NS} rollout status deploy/usuarios
-    //       '''
-    //     }
-    //   }
-    // }
   }
 
   post {
-    success { echo "✅ OK — gateway ${IMAGE_TAG} construido, publicado y desplegado" }
-    failure { echo "❌ Falló el pipeline (revisa el stage en rojo)" }
+    always {
+      echo "🧹 Limpieza de workspace"
+      cleanWs()
+    }
+    success {
+      echo "✅ Pipeline OK"
+    }
+    failure {
+      echo "❌ Pipeline FAIL"
+    }
+    unstable {
+      echo "⚠️ Pipeline inestable"
+    }
+    changed {
+      echo "🔄 Estado del pipeline cambió desde el último build"
+    }
   }
 }
