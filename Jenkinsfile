@@ -50,7 +50,7 @@ spec:
 
   environment {
     // >>> CAMBIA ESTO <<<
-    DOCKER_REGISTRY = 'docker.io/tuusuario' // p.ej. docker.io/tuusuario ó ghcr.io/tuorg
+    DOCKER_REGISTRY = 'docker.io/rojassluu' // p.ej. docker.io/tuusuario ó ghcr.io/tuorg
     IMAGE_NAME      = 'comunicacion-microservicios'
     IMAGE_TAG       = "${env.BUILD_NUMBER}"
   }
