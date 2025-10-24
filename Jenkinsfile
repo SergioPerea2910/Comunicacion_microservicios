@@ -10,7 +10,7 @@ spec:
   serviceAccountName: default
   containers:
     - name: maven
-      image: maven:3.9.9-eclipse-temurin-17
+      image: maven:3.9.9-eclipse-temurin-21
       command: ['cat']
       tty: true
       volumeMounts:
