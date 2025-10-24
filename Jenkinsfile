@@ -6,27 +6,20 @@ pipeline {
       yaml """
 apiVersion: v1
 kind: Pod
-metadata:
-  labels:
-    jenkins/label: jenkins-jenkins-agent
 spec:
   serviceAccountName: default
   containers:
     - name: maven
       image: maven:3.9.9-eclipse-temurin-17
-      command:
-        - cat
+      command: ['cat']
       tty: true
       volumeMounts:
         - name: m2-cache
           mountPath: /root/.m2
     - name: kaniko
       image: gcr.io/kaniko-project/executor:debug
-      command:
-        - /busybox/sh
-        - -c
-      args:
-        - "sleep 365d"
+      command: ['/busybox/sh','-c']
+      args: ['sleep 365d']
       env:
         - name: DOCKER_CONFIG
           value: /kaniko/.docker
@@ -49,8 +42,11 @@ spec:
   }
 
   environment {
-    // >>> CAMBIA ESTO <<<
-    DOCKER_REGISTRY = 'docker.io/rojassluu' // p.ej. docker.io/tuusuario ó ghcr.io/tuorg
+    // Cambia si tu módulo no está en 'app'
+    APP_DIR = 'app'
+
+    // Cambia a tu registro (docker.io/tuusuario o ghcr.io/tuorg)
+    DOCKER_REGISTRY = 'docker.io/rojassluu'
     IMAGE_NAME      = 'comunicacion-microservicios'
     IMAGE_TAG       = "${env.BUILD_NUMBER}"
   }
@@ -63,7 +59,7 @@ spec:
   }
 
   triggers {
-    // Revisa cambios cada 5 minutos (opcional, si no usas webhooks)
+    // opcional si no usas webhooks
     pollSCM('H/5 * * * *')
   }
 
@@ -72,6 +68,11 @@ spec:
       steps {
         echo "🚀 Iniciando pipeline: ${env.JOB_NAME} #${env.BUILD_NUMBER}"
         checkout scm
+
+        // Evita 'detected dubious ownership' de Git en el workspace montado
+        sh 'git config --global --add safe.directory "$WORKSPACE" || true'
+
+        // Verificar última confirmación
         sh 'git log -1 --oneline || true'
       }
     }
@@ -79,35 +80,31 @@ spec:
     stage('Build (Maven)') {
       steps {
         container('maven') {
-          sh '''
-            echo "Java:"
-            java -version
-            echo "Maven:"
-            mvn -v
+          dir("${APP_DIR}") {
+            sh '''
+              echo "Java:" && java -version
+              echo "Maven:" && mvn -v
 
-            # Compila y reempaqueta el JAR ejecutable
-            mvn -B -DskipTests clean package spring-boot:repackage
+              # Compilar y generar JAR ejecutable
+              mvn -B -DskipTests clean package spring-boot:repackage
 
-            echo "Contenido de target/:"
-            ls -lah target || true
-          '''
+              echo "Contenido de target/:"
+              ls -lah target || true
+            '''
+          }
         }
       }
     }
 
     stage('Archive artifact') {
       steps {
-        archiveArtifacts artifacts: 'target/*.jar,**/target/*.jar', excludes: '**/*.original', fingerprint: true
+        archiveArtifacts artifacts: "${APP_DIR}/target/*.jar", excludes: '**/*.original', fingerprint: true
       }
     }
 
     stage('Docker Build & Push (Kaniko)') {
       when {
-        anyOf {
-          branch 'main'
-          branch 'master'
-          branch 'develop'
-        }
+        anyOf { branch 'main'; branch 'master'; branch 'develop' }
         expression { fileExists('Dockerfile') }
       }
       steps {
@@ -117,6 +114,7 @@ spec:
             /kaniko/executor \
               --context "${WORKSPACE}" \
               --dockerfile "${WORKSPACE}/Dockerfile" \
+              --build-arg JAR_FILE="${APP_DIR}/target/*.jar" \
               --destination "${DOCKER_REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG}" \
               --destination "${DOCKER_REGISTRY}/${IMAGE_NAME}:latest" \
               --snapshotMode=redo \
@@ -127,9 +125,7 @@ spec:
     }
 
     stage('Deploy to Production') {
-      when {
-        branch 'main'
-      }
+      when { branch 'main' }
       steps {
         script {
           timeout(time: 10, unit: 'MINUTES') {
@@ -146,19 +142,12 @@ spec:
   post {
     always {
       echo "🧹 Limpieza de workspace"
-      cleanWs()
+      // Sustituto de cleanWs() sin plugin
+      deleteDir()
     }
-    success {
-      echo "✅ Pipeline OK"
-    }
-    failure {
-      echo "❌ Pipeline FAIL"
-    }
-    unstable {
-      echo "⚠️ Pipeline inestable"
-    }
-    changed {
-      echo "🔄 Estado del pipeline cambió desde el último build"
-    }
+    success { echo "✅ Pipeline OK" }
+    failure { echo "❌ Pipeline FAIL" }
+    unstable { echo "⚠️ Pipeline inestable" }
+    changed { echo "🔄 Estado del pipeline cambió" }
   }
 }
