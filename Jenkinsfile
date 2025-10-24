@@ -11,6 +11,9 @@ spec:
   containers:
     - name: kaniko
       image: gcr.io/kaniko-project/executor:debug
+      env:
+        - name: DOCKER_CONFIG
+          value: /kaniko/.docker
       command: ["/busybox/sh","-c"]
       args: ["sleep infinity"]
       volumeMounts:
@@ -32,15 +35,14 @@ spec:
     }
   }
 
-  // Puedes usar triggers { githubPush() } si tienes el plugin GitHub configurado con webhooks
+  // Usa pollSCM mientras el webhook no esté 100% operativo
   triggers { pollSCM('H/2 * * * *') }
 
   environment {
     REGISTRY     = 'docker.io'
-    REGISTRY_NS  = 'rojassluu'         // tu namespace en Docker Hub
-    APP_NS       = 'microservicios'    // namespace de tus apps en Minikube/K8s
-    COMMIT_SHA   = "${env.GIT_COMMIT?.take(7) ?: 'dev'}"
-    IMAGE_TAG    = "${COMMIT_SHA}"
+    REGISTRY_NS  = 'rojassluu'          // tu cuenta DockerHub
+    APP_NS       = 'microservicios'
+    IMAGE_TAG    = "${env.GIT_COMMIT?.take(7) ?: 'dev'}"
   }
 
   stages {
@@ -50,67 +52,74 @@ spec:
       }
     }
 
-    stage('Build & Push images (Kaniko)') {
+    stage('Build & Push (gateway)') {
       steps {
         container('kaniko') {
           sh '''
             set -eux
-
-            build () {
-              local ctx="$1" img="$2"
-              echo "🔨 Construyendo imagen para $img..."
-              /kaniko/executor \
-                --verbosity=debug \
-                --context="${ctx}" \
-                --dockerfile="${ctx}/Dockerfile" \
-                --destination ${REGISTRY}/${REGISTRY_NS}/${img}:${IMAGE_TAG} \
-                --destination ${REGISTRY}/${REGISTRY_NS}/${img}:latest \
-                --cache=true
-            }
-
-            build gateway-service  gateway-service
-            build pedidos-service  pedidos-service
-            build usuarios-service usuarios-service
+            /kaniko/executor \
+              --verbosity=debug \
+              --context="gateway-service" \
+              --dockerfile="gateway-service/Dockerfile" \
+              --destination ${REGISTRY}/${REGISTRY_NS}/gateway-service:${IMAGE_TAG} \
+              --destination ${REGISTRY}/${REGISTRY_NS}/gateway-service:latest \
+              --cache=true
           '''
         }
       }
     }
 
-    stage('Deploy to Minikube (kubectl)') {
+    stage('Deploy (gateway)') {
       steps {
         container('kubectl') {
           sh '''
             set -eux
-
-            echo "🚀 Desplegando en Kubernetes (Minikube)..."
-
-            kubectl apply -f k8s/namespace.yaml
-            kubectl apply -f k8s/usuarios.yaml
-            kubectl apply -f k8s/pedidos.yaml
+            kubectl create ns ${APP_NS} --dry-run=client -o yaml | kubectl apply -f -
+            kubectl apply -f k8s/namespace.yaml || true
             kubectl apply -f k8s/gateway.yaml
 
-            kubectl -n ${APP_NS} set image deploy/usuarios usuarios=${REGISTRY}/${REGISTRY_NS}/usuarios-service:${IMAGE_TAG}
-            kubectl -n ${APP_NS} set image deploy/pedidos  pedidos=${REGISTRY}/${REGISTRY_NS}/pedidos-service:${IMAGE_TAG}
-            kubectl -n ${APP_NS} set image deploy/gateway  gateway=${REGISTRY}/${REGISTRY_NS}/gateway-service:${IMAGE_TAG}
+            kubectl -n ${APP_NS} set image deploy/gateway \
+              gateway=${REGISTRY}/${REGISTRY_NS}/gateway-service:${IMAGE_TAG}
 
-            kubectl -n ${APP_NS} rollout status deploy/usuarios
-            kubectl -n ${APP_NS} rollout status deploy/pedidos
-            kubectl -n ${APP_NS} rollout status deploy/gateway
-
-            echo "🌐 Gateway URL:"
+            kubectl -n ${APP_NS} rollout status deploy/gateway --timeout=120s
+            echo "URL Gateway:"
             minikube service gateway -n ${APP_NS} --url || true
           '''
         }
       }
     }
+
+    // Descomenta cuando gateway funcione
+    // stage('Build & Push (resto)') {
+    //   steps {
+    //     container('kaniko') {
+    //       sh '''
+    //         set -eux
+    //         /kaniko/executor --context="pedidos-service"  --dockerfile="pedidos-service/Dockerfile"  --destination ${REGISTRY}/${REGISTRY_NS}/pedidos-service:${IMAGE_TAG}  --destination ${REGISTRY}/${REGISTRY_NS}/pedidos-service:latest  --cache=true
+    //         /kaniko/executor --context="usuarios-service" --dockerfile="usuarios-service/Dockerfile" --destination ${REGISTRY}/${REGISTRY_NS}/usuarios-service:${IMAGE_TAG} --destination ${REGISTRY}/${REGISTRY_NS}/usuarios-service:latest --cache=true
+    //       '''
+    //     }
+    //   }
+    // }
+    // stage('Deploy (resto)') {
+    //   steps {
+    //     container('kubectl') {
+    //       sh '''
+    //         set -eux
+    //         kubectl apply -f k8s/pedidos.yaml
+    //         kubectl apply -f k8s/usuarios.yaml
+    //         kubectl -n ${APP_NS} set image deploy/pedidos  pedidos=${REGISTRY}/${REGISTRY_NS}/pedidos-service:${IMAGE_TAG}
+    //         kubectl -n ${APP_NS} set image deploy/usuarios usuarios=${REGISTRY}/${REGISTRY_NS}/usuarios-service:${IMAGE_TAG}
+    //         kubectl -n ${APP_NS} rollout status deploy/pedidos
+    //         kubectl -n ${APP_NS} rollout status deploy/usuarios
+    //       '''
+    //     }
+    //   }
+    // }
   }
 
   post {
-    success {
-      echo "✅ Build & Deploy completado con éxito — tag ${IMAGE_TAG}"
-    }
-    failure {
-      echo "❌ Falló el pipeline (revisa la etapa en rojo o logs de Kaniko)."
-    }
+    success { echo "✅ OK — gateway ${IMAGE_TAG} construido, publicado y desplegado" }
+    failure { echo "❌ Falló el pipeline (revisa el stage en rojo)" }
   }
 }
