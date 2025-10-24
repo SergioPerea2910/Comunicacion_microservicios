@@ -143,7 +143,7 @@ spec:
     always {
       echo "🧹 Limpieza de workspace"
       // Sustituto de cleanWs() sin plugin
-      deleteDir()
+     // deleteDir()
     }
     success { echo "✅ Pipeline OK" }
     failure { echo "❌ Pipeline FAIL" }
