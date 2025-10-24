@@ -25,24 +25,29 @@ spec:
         sources:
           - secret:
               name: dockerhub-creds-json
+              items:
+                - key: .dockerconfigjson
+                  path: config.json
 """
     }
   }
 
-  // Si ya tienes webhook + plugin GitHub, puedes usar: triggers { githubPush() }
+  // Puedes usar triggers { githubPush() } si tienes el plugin GitHub configurado con webhooks
   triggers { pollSCM('H/2 * * * *') }
 
   environment {
     REGISTRY     = 'docker.io'
-    REGISTRY_NS  = 'rojassluu'
-    APP_NS       = 'microservicios'
+    REGISTRY_NS  = 'rojassluu'         // tu namespace en Docker Hub
+    APP_NS       = 'microservicios'    // namespace de tus apps en Minikube/K8s
     COMMIT_SHA   = "${env.GIT_COMMIT?.take(7) ?: 'dev'}"
     IMAGE_TAG    = "${COMMIT_SHA}"
   }
 
   stages {
     stage('Checkout') {
-      steps { checkout scm }
+      steps {
+        checkout scm
+      }
     }
 
     stage('Build & Push images (Kaniko)') {
@@ -53,7 +58,9 @@ spec:
 
             build () {
               local ctx="$1" img="$2"
+              echo "🔨 Construyendo imagen para $img..."
               /kaniko/executor \
+                --verbosity=debug \
                 --context="${ctx}" \
                 --dockerfile="${ctx}/Dockerfile" \
                 --destination ${REGISTRY}/${REGISTRY_NS}/${img}:${IMAGE_TAG} \
@@ -75,6 +82,8 @@ spec:
           sh '''
             set -eux
 
+            echo "🚀 Desplegando en Kubernetes (Minikube)..."
+
             kubectl apply -f k8s/namespace.yaml
             kubectl apply -f k8s/usuarios.yaml
             kubectl apply -f k8s/pedidos.yaml
@@ -88,7 +97,7 @@ spec:
             kubectl -n ${APP_NS} rollout status deploy/pedidos
             kubectl -n ${APP_NS} rollout status deploy/gateway
 
-            echo "URL Gateway (NodePort si aplica):"
+            echo "🌐 Gateway URL:"
             minikube service gateway -n ${APP_NS} --url || true
           '''
         }
@@ -97,7 +106,11 @@ spec:
   }
 
   post {
-    success { echo "✅ Build & Deploy OK — tag ${IMAGE_TAG}" }
-    failure { echo "❌ Falló el pipeline (revisa la etapa en rojo)." }
+    success {
+      echo "✅ Build & Deploy completado con éxito — tag ${IMAGE_TAG}"
+    }
+    failure {
+      echo "❌ Falló el pipeline (revisa la etapa en rojo o logs de Kaniko)."
+    }
   }
 }
