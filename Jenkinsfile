@@ -9,71 +9,58 @@ kind: Pod
 spec:
   serviceAccountName: jenkins
   containers:
-   - name: kaniko
-     image: gcr.io/kaniko-project/executor:debug
-     command:
-       - "/busybox/sh"
-       - "-c"
-     args:
-       - "sleep infinity"
-     volumeMounts:
-       - name: docker-config
-         mountPath: /kaniko/.docker
-  - name: kubectl
-    image: bitnami/kubectl:latest
-    command: ['sleep','infinity']
+    - name: kaniko
+      image: gcr.io/kaniko-project/executor:debug
+      command: ["/busybox/sh","-c"]
+      args: ["sleep infinity"]
+      volumeMounts:
+        - name: docker-config
+          mountPath: /kaniko/.docker
+    - name: kubectl
+      image: bitnami/kubectl:latest
+      command: ["sleep","infinity"]
   volumes:
-  - name: docker-config
-    projected:
-      sources:
-      - secret:
-          name: dockerhub-creds-json
+    - name: docker-config
+      projected:
+        sources:
+          - secret:
+              name: dockerhub-creds-json
 """
     }
   }
 
-  triggers { githubPush() }     // dispara con cada push
-  options  { timestamps() }
+  // Si ya tienes webhook + plugin GitHub, puedes usar: triggers { githubPush() }
+  triggers { pollSCM('H/2 * * * *') }
 
   environment {
-    REGISTRY    = 'docker.io'
-    REGISTRY_NS = 'rojassluu'           // <-- cambia si es otro namespace en Docker Hub
-    APP_NS      = 'microservicios'
-    IMAGE_TAG   = "${env.GIT_COMMIT?.take(7) ?: 'dev'}"
+    REGISTRY     = 'docker.io'
+    REGISTRY_NS  = 'rojassluu'
+    APP_NS       = 'microservicios'
+    COMMIT_SHA   = "${env.GIT_COMMIT?.take(7) ?: 'dev'}"
+    IMAGE_TAG    = "${COMMIT_SHA}"
   }
 
   stages {
-    stage('Checkout'){ steps { checkout scm } }
-
-    stage('Docker auth secret (para Kaniko)') {
-      steps {
-        withCredentials([usernamePassword(credentialsId: 'dockerhub-creds',
-                           usernameVariable: 'DH_USER', passwordVariable: 'DH_PASS')]) {
-          sh '''
-            kubectl -n jenkins delete secret dockerhub-creds-json --ignore-not-found
-            kubectl -n jenkins create secret docker-registry dockerhub-creds-json \
-              --docker-server=https://index.docker.io/v1/ \
-              --docker-username="$DH_USER" \
-              --docker-password="$DH_PASS" \
-              --docker-email="no-reply@example.com"
-          '''
-        }
-      }
+    stage('Checkout') {
+      steps { checkout scm }
     }
 
-    stage('Build & Push (Kaniko)') {
+    stage('Build & Push images (Kaniko)') {
       steps {
         container('kaniko') {
           sh '''
             set -eux
+
             build () {
-              ctx="$1"; img="$2"
+              local ctx="$1" img="$2"
               /kaniko/executor \
-                --context="${ctx}" --dockerfile="${ctx}/Dockerfile" \
+                --context="${ctx}" \
+                --dockerfile="${ctx}/Dockerfile" \
                 --destination ${REGISTRY}/${REGISTRY_NS}/${img}:${IMAGE_TAG} \
                 --destination ${REGISTRY}/${REGISTRY_NS}/${img}:latest \
                 --cache=true
             }
+
             build gateway-service  gateway-service
             build pedidos-service  pedidos-service
             build usuarios-service usuarios-service
@@ -82,11 +69,12 @@ spec:
       }
     }
 
-    stage('Deploy a Minikube') {
+    stage('Deploy to Minikube (kubectl)') {
       steps {
         container('kubectl') {
           sh '''
             set -eux
+
             kubectl apply -f k8s/namespace.yaml
             kubectl apply -f k8s/usuarios.yaml
             kubectl apply -f k8s/pedidos.yaml
@@ -100,7 +88,7 @@ spec:
             kubectl -n ${APP_NS} rollout status deploy/pedidos
             kubectl -n ${APP_NS} rollout status deploy/gateway
 
-            echo "URL Gateway:"
+            echo "URL Gateway (NodePort si aplica):"
             minikube service gateway -n ${APP_NS} --url || true
           '''
         }
@@ -110,6 +98,6 @@ spec:
 
   post {
     success { echo "✅ Build & Deploy OK — tag ${IMAGE_TAG}" }
-    failure { echo "❌ Falló el pipeline (revisa la etapa en rojo)" }
+    failure { echo "❌ Falló el pipeline (revisa la etapa en rojo)." }
   }
 }
