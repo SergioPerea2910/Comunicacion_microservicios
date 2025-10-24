@@ -43,7 +43,7 @@ spec:
 
   environment {
     // Cambia si tu módulo no está en 'app'
-    APP_DIR = 'GatewayApplication/'
+    APP_DIR = 'gateway-service'
 
     // Cambia a tu registro (docker.io/tuusuario o ghcr.io/tuorg)
     DOCKER_REGISTRY = 'docker.io/rojassluu'
