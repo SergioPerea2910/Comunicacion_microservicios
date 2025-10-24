@@ -9,12 +9,16 @@ kind: Pod
 spec:
   serviceAccountName: jenkins
   containers:
-  - name: kaniko
-    image: gcr.io/kaniko-project/executor:v1.23.0
-    args: ['sleep','infinity']
-    volumeMounts:
-    - name: docker-config
-      mountPath: /kaniko/.docker
+   - name: kaniko
+     image: gcr.io/kaniko-project/executor:debug
+     command:
+       - "/busybox/sh"
+       - "-c"
+     args:
+       - "sleep infinity"
+     volumeMounts:
+       - name: docker-config
+         mountPath: /kaniko/.docker
   - name: kubectl
     image: bitnami/kubectl:latest
     command: ['sleep','infinity']
