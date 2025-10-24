@@ -15,15 +15,48 @@ spec:
       volumeMounts:
         - name: m2-cache
           mountPath: /root/.m2
+        - name: kaniko
+          image: gcr.io/kaniko-project/executor:debug
+          command: ['/busybox/sh','-c']
+          args: ['sleep 365d']
+          env:
+            - name: DOCKER_CONFIG
+              value: /kaniko/.docker
+          volumeMounts:
+            - name: docker-config
+              mountPath: /kaniko/.docker
+     - name: kaniko
+       image: gcr.io/kaniko-project/executor:debug
+       command: ['/busybox/sh','-c']
+       args: ['sleep 365d']
+       env:
+         - name: DOCKER_CONFIG
+           value: /kaniko/.docker
+       volumeMounts:
+         - name: docker-config
+           mountPath: /kaniko/.docker
+
   volumes:
     - name: m2-cache
       emptyDir: {}
+    - name: docker-config
+      projected:
+        sources:
+          - secret:
+              name: dockerhub-creds-json     # <- el Secret que creamos
+              items:
+                - key: .dockerconfigjson
+                  path: config.json
+
 """
     }
   }
 
   environment {
     APP_DIR = 'gateway-service'
+    DOCKER_REGISTRY = 'docker.io/rojassluu'
+    IMAGE_TAG = "${env.BUILD_NUMBER}"
+
   }
 
   options {
@@ -59,19 +92,37 @@ spec:
       }
     }
 
-    stage('Archivar JAR') {
+ stage('Archivar JAR') {
       steps {
         archiveArtifacts artifacts: "${APP_DIR}/target/*.jar", excludes: '**/*.original', fingerprint: true
       }
     }
   }
 
-  post {
-    success {
-      echo "✅ Build generado correctamente"
+
+
+stage('Docker Build & Push (Kaniko)') {
+  when {
+    expression { fileExists("${APP_DIR}/Dockerfile") }   // solo si existe el Dockerfile
+  }
+  steps {
+    container('kaniko') {
+      sh '''
+        echo "🐳 Construyendo y publicando imagen con Kaniko..."
+        /kaniko/executor \
+          --context "${WORKSPACE}/${APP_DIR}" \
+          --dockerfile "${WORKSPACE}/${APP_DIR}/Dockerfile" \
+          --destination "${DOCKER_REGISTRY}/${APP_DIR}:${IMAGE_TAG}" \
+          --destination "${DOCKER_REGISTRY}/${APP_DIR}:latest" \
+          --snapshotMode=redo \
+          --use-new-run
+      '''
     }
-    failure {
-      echo "❌ Error en el build"
-    }
+  }
+}
+
+post {
+    success { echo "✅ Build y push completados" }
+    failure { echo "❌ Falló build/push" }
   }
 }
