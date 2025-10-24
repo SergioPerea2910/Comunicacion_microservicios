@@ -57,10 +57,10 @@ spec:
   }
 
   environment {
-    // Cambia si tu módulo no está en 'app'
+
     APP_DIR = 'gateway-service'
 
-    // Cambia a tu registro (docker.io/tuusuario o ghcr.io/tuorg)
+
     DOCKER_REGISTRY = 'docker.io/rojassluu'
     IMAGE_NAME      = 'comunicacion-microservicios'
     IMAGE_TAG       = "${env.BUILD_NUMBER}"
