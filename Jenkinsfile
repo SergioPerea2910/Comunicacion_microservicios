@@ -26,8 +26,8 @@ spec:
       volumeMounts:
         - name: docker-config
           mountPath: /kaniko/.docker
-   - name: kubectl-helm
-      image: alpine/helm:3.12.0
+    - name: kubectl-helm
+      image: dtzar/helm-kubectl:3.12.0   # <- trae kubectl + helm
       command: ['cat']
       tty: true
       volumeMounts:
