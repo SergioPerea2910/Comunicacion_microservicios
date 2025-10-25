@@ -27,7 +27,7 @@ spec:
         - name: docker-config
           mountPath: /kaniko/.docker
     - name: kubectl-helm
-      image: dtzar/helm-kubectl:3.12.0   # <- trae kubectl + helm
+      image: dtzar/helm-kubectl:3.12.0   # helm + kubectl
       command: ['cat']
       tty: true
       volumeMounts:
@@ -56,126 +56,123 @@ spec:
     }
   }
 
+  parameters {
+    string(name: 'ONLY', defaultValue: '', description: 'Opcional: gateway-service | pedidos-service | usuarios-service')
+    booleanParam(name: 'DEPLOY', defaultValue: true, description: 'Desplegar con Helm al final de cada build')
+  }
+
   environment {
-    APP_DIR = 'gateway-service'
     DOCKER_REGISTRY = 'docker.io/rojassluu'
-    IMAGE_TAG = "${env.BUILD_NUMBER}"
+    IMAGE_TAG       = "${env.BUILD_NUMBER}"
+    SERVICES        = "gateway-service,pedidos-service,usuarios-service"
   }
 
   options {
-    buildDiscarder(logRotator(numToKeepStr: '10'))
-    timeout(time: 30, unit: 'MINUTES')
+    buildDiscarder(logRotator(numToKeepStr: '15'))
+    timeout(time: 60, unit: 'MINUTES')
     disableConcurrentBuilds()
+    skipStagesAfterUnstable()
   }
 
   stages {
-
     stage('Checkout') {
       steps {
-        echo "🚀 Iniciando pipeline..."
+        echo "🚀 ${env.JOB_NAME} #${env.BUILD_NUMBER}"
         checkout scm
         sh 'git config --global --add safe.directory "$WORKSPACE" || true'
-        sh 'git log -1 --oneline || true'
       }
     }
 
-    stage('Build (Maven)') {
+    stage('Build + Push (+ Deploy) por servicio (secuencial)') {
       steps {
-        container('maven') {
-          dir("${APP_DIR}") {
-            sh '''
-              echo "Java:" && java -version
-              echo "Maven:" && mvn -v
-              mvn -B -DskipTests clean package spring-boot:repackage
-              echo "📦 target/:"
-              ls -lah target || true
-            '''
+        script {
+          def list = params.ONLY?.trim() ? [params.ONLY.trim()] : env.SERVICES.split(',') as List
+          for (svc in list) {
+            echo "▶️ Servicio: ${svc}"
+            if (!fileExists("${svc}/pom.xml")) {
+              echo "ℹ️  ${svc} no tiene pom.xml; salto."
+              continue
+            }
+
+            stage("Build: ${svc}") {
+              container('maven') {
+                dir("${svc}") {
+                  sh '''
+                    echo "Java:" && java -version
+                    echo "Maven:" && mvn -v
+                    mvn -B -DskipTests clean package spring-boot:repackage
+                    ls -lah target || true
+                  '''
+                }
+              }
+              archiveArtifacts artifacts: "${svc}/target/*.jar", excludes: '**/*.original', fingerprint: true
+            }
+
+            stage("Image (Kaniko): ${svc}") {
+              container('kaniko') {
+                retry(2) { // reintenta por si hay handshake/tls intermitente
+                  sh """
+                    set -euo pipefail
+                    IMAGE_REPO="${DOCKER_REGISTRY}/${svc}"
+                    echo "🐳 Kaniko: \${IMAGE_REPO}:${IMAGE_TAG}"
+
+                    EXTRA_DEST=""
+                    if [ "\${BRANCH_NAME:-}" = "main" ] || [ "\${BRANCH_NAME:-}" = "master" ]; then
+                      EXTRA_DEST="--destination \${IMAGE_REPO}:latest"
+                    fi
+
+                    test -f /kaniko/.docker/config.json || { echo "❌ Falta /kaniko/.docker/config.json"; exit 1; }
+
+                    /kaniko/executor \
+                      --context "${WORKSPACE}/${svc}" \
+                      --dockerfile "${WORKSPACE}/${svc}/Dockerfile" \
+                      --destination "\${IMAGE_REPO}:${IMAGE_TAG}" \
+                      \${EXTRA_DEST} \
+                      --snapshotMode=redo \
+                      --use-new-run
+                  """
+                }
+              }
+            }
+
+            if (params.DEPLOY && fileExists("${svc}/charts/Chart.yaml")) {
+              stage("Deploy (Helm): ${svc}") {
+                container('kubectl-helm') {
+                  sh """
+                    set -euo pipefail
+                    echo "🚀 Helm deploy: ${svc} tag=${IMAGE_TAG}"
+
+                    kubectl create namespace microservicios --dry-run=client -o yaml | kubectl apply -f -
+
+                    cd "${WORKSPACE}/${svc}"
+                    helm dependency update charts/ || echo "Sin dependencias"
+
+                    helm upgrade --install ${svc} ./charts/ \
+                      --namespace microservicios \
+                      --set image.repository="${DOCKER_REGISTRY}/${svc}" \
+                      --set-string image.tag="${IMAGE_TAG}" \
+                      --set image.pullPolicy=Always \
+                      --wait --timeout=300s
+
+                    echo "✅ Deployed: ${DOCKER_REGISTRY}/${svc}:${IMAGE_TAG}"
+                    kubectl -n microservicios get deploy,po,svc -l app=${svc} || true
+                  """
+                }
+              }
+            } else {
+              echo "⏭️  Despliegue omitido para ${svc} (DEPLOY=${params.DEPLOY}, chart=${fileExists(svc+'/charts/Chart.yaml')})"
+            }
+
+            // pequeña pausa entre servicios para no estresar red/registro
+            sleep 2
           }
         }
       }
-      post {
-        failure {
-          echo "❌ Falló el build con Maven; mostrando contenido de workspace"
-          sh 'ls -lah'
-        }
-      }
     }
-
-    stage('Archive artifact') {
-      steps {
-        archiveArtifacts artifacts: "${APP_DIR}/target/*.jar", excludes: '**/*.original', fingerprint: true
-      }
-    }
-
-    stage('Docker Build & Push (Kaniko)') {
-      when {
-        expression { fileExists("${APP_DIR}/Dockerfile") }
-        // anyOf { branch 'main'; branch 'master'; branch 'develop' } // opcional
-      }
-      steps {
-        container('kaniko') {
-          sh '''
-            set -euo pipefail
-               IMAGE_REPO="${DOCKER_REGISTRY}/${APP_DIR}"
-
-               echo "🐳 Kaniko: ${IMAGE_REPO}:${IMAGE_TAG}"
-
-               /kaniko/executor \
-                 --context "${WORKSPACE}/${APP_DIR}" \
-                 --dockerfile "${WORKSPACE}/${APP_DIR}/Dockerfile" \
-                 --destination "${IMAGE_REPO}:${IMAGE_TAG}" \
-                 --destination "${IMAGE_REPO}:latest" \
-                 --snapshotMode=redo \
-                 --use-new-run
-          '''
-        }
-      }
-    }
-
-  stage('Deploy with Helm to Minikube') {
-    when {
-      anyOf { branch 'main'; branch 'master'; branch 'develop' }
-    }
-    steps {
-      container('kubectl-helm') {
-        sh '''
-          echo "🚀 Iniciando despliegue con Helm en Minikube..."
-
-          # Verificar conexión a cluster
-          kubectl cluster-info
-
-          # Crear namespace si no existe
-          kubectl create namespace microservicios --dry-run=client -o yaml | kubectl apply -f -
-
-          # Cambiar al directorio del servicio
-          cd "${WORKSPACE}/${APP_DIR}"
-
-          # Actualizar dependencias del chart (si las hubiera)
-          helm dependency update charts/ || echo "No hay dependencias que actualizar"
-
-          # Desplegar con Helm
-          helm upgrade --install ${APP_DIR} ./charts/ \
-            --namespace microservicios \
-           --set image.repository="${DOCKER_REGISTRY}/${APP_DIR}" \
-           --set image.tag="${IMAGE_TAG}" \
-           --set image.pullPolicy=Always \
-            --wait \
-            --timeout=300s
-
-          # Verificar el despliegue
-          kubectl get pods -n microservicios -l app=${APP_DIR}
-          kubectl get svc -n microservicios -l app=${APP_DIR}
-
-          echo "✅ Despliegue completado exitosamente"
-        '''
-      }
-    }
-  }
-
   }
 
   post {
-    always { echo "🧹 Fin de ejecución (global)" }
+    always  { echo "🧹 Fin de ejecución (global)" }
     success { echo "✅ Pipeline OK" }
     failure { echo "❌ Pipeline FAIL" }
   }
