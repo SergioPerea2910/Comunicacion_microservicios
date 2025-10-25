@@ -115,14 +115,18 @@ spec:
       steps {
         container('kaniko') {
           sh '''
-            echo "🐳 Construyendo y publicando imagen con Kaniko..."
-            /kaniko/executor \
-              --context "${WORKSPACE}/${APP_DIR}" \
-              --dockerfile "${WORKSPACE}/${APP_DIR}/Dockerfile" \
-              --destination "${DOCKER_REGISTRY}/${APP_DIR}:${IMAGE_TAG}" \
-              --destination "${DOCKER_REGISTRY}/${SERVICE}:latest" \
-              --snapshotMode=redo \
-              --use-new-run
+            set -euo pipefail
+               IMAGE_REPO="${DOCKER_REGISTRY}/${APP_DIR}"
+
+               echo "🐳 Kaniko: ${IMAGE_REPO}:${IMAGE_TAG}"
+
+               /kaniko/executor \
+                 --context "${WORKSPACE}/${APP_DIR}" \
+                 --dockerfile "${WORKSPACE}/${APP_DIR}/Dockerfile" \
+                 --destination "${IMAGE_REPO}:${IMAGE_TAG}" \
+                 --destination "${IMAGE_REPO}:latest" \
+                 --snapshotMode=redo \
+                 --use-new-run
           '''
         }
       }
