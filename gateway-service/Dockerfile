@@ -5,6 +5,7 @@ COPY pom.xml .
 COPY src ./src
 RUN mvn clean package -DskipTests
 
+
 # Run stage
 FROM eclipse-temurin:21-jre-jammy
 WORKDIR /app

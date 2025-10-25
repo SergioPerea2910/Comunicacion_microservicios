@@ -1,7 +1,7 @@
 replicaCount: 1
 
 image:
-  repository: gateway-service
+  repository: docker.io/rojassluu/gateway-service
   pullPolicy: IfNotPresent
   tag: "latest"
 
