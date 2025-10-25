@@ -1,64 +1,9 @@
 pipeline {
-  agent {
-    kubernetes {
-      label 'linux'
-      defaultContainer 'maven'
-      yaml """
-apiVersion: v1
-kind: Pod
-spec:
-  serviceAccountName: default
-  containers:
-    - name: maven
-      image: maven:3.9.9-eclipse-temurin-21
-      command: ['cat']
-      tty: true
-      volumeMounts:
-        - name: m2-cache
-          mountPath: /root/.m2
-    - name: kaniko
-      image: gcr.io/kaniko-project/executor:debug
-      command: ['/busybox/sh','-c']
-      args: ['sleep 365d']
-      env:
-        - name: DOCKER_CONFIG
-          value: /kaniko/.docker
-      volumeMounts:
-        - name: docker-config
-          mountPath: /kaniko/.docker
-    - name: kubectl-helm
-      image: dtzar/helm-kubectl:3.12.0   # helm + kubectl
-      command: ['cat']
-      tty: true
-      volumeMounts:
-        - name: kubeconfig
-          mountPath: /root/.kube
-  volumes:
-    - name: m2-cache
-      emptyDir: {}
-    - name: docker-config
-      projected:
-        sources:
-          - secret:
-              name: dockerhub-creds-json
-              items:
-                - key: .dockerconfigjson
-                  path: config.json
-    - name: kubeconfig
-      projected:
-        sources:
-          - secret:
-              name: kubeconfig-secret
-              items:
-                - key: config
-                  path: config
-"""
-    }
-  }
+  agent any
 
   parameters {
     string(name: 'ONLY', defaultValue: '', description: 'Opcional: gateway-service | pedidos-service | usuarios-service')
-    booleanParam(name: 'DEPLOY', defaultValue: true, description: 'Desplegar con Helm al final de cada build')
+    booleanParam(name: 'DEPLOY', defaultValue: true, description: 'Desplegar con Helm al final de cada servicio')
   }
 
   environment {
@@ -75,11 +20,13 @@ spec:
   }
 
   stages {
+
     stage('Checkout') {
       steps {
         echo "🚀 ${env.JOB_NAME} #${env.BUILD_NUMBER}"
         checkout scm
         sh 'git config --global --add safe.directory "$WORKSPACE" || true'
+        sh 'git log -1 --oneline || true'
       }
     }
 
@@ -87,84 +34,77 @@ spec:
       steps {
         script {
           def list = params.ONLY?.trim() ? [params.ONLY.trim()] : env.SERVICES.split(',') as List
+
           for (svc in list) {
             echo "▶️ Servicio: ${svc}"
             if (!fileExists("${svc}/pom.xml")) {
-              echo "ℹ️  ${svc} no tiene pom.xml; salto."
+              echo "ℹ️  ${svc} no tiene pom.xml; se omite."
               continue
             }
 
-            stage("Build: ${svc}") {
-              container('maven') {
-                dir("${svc}") {
-                  sh '''
-                    echo "Java:" && java -version
-                    echo "Maven:" && mvn -v
-                    mvn -B -DskipTests clean package spring-boot:repackage
-                    ls -lah target || true
-                  '''
-                }
+            stage("Build (Maven): ${svc}") {
+              dir("${svc}") {
+                sh '''
+                  echo "Java:" && java -version || true
+                  echo "Maven:" && mvn -v || true
+                  mvn -B -DskipTests clean package spring-boot:repackage
+                  ls -lah target || true
+                '''
               }
               archiveArtifacts artifacts: "${svc}/target/*.jar", excludes: '**/*.original', fingerprint: true
             }
 
-            stage("Image (Kaniko): ${svc}") {
-              container('kaniko') {
-                retry(2) { // reintenta por si hay handshake/tls intermitente
-                  sh """
-                    set -euo pipefail
-                    IMAGE_REPO="${DOCKER_REGISTRY}/${svc}"
-                    echo "🐳 Kaniko: \${IMAGE_REPO}:${IMAGE_TAG}"
+            stage("Image (Docker build & push): ${svc}") {
+              withEnv(["IMAGE_REPO=${DOCKER_REGISTRY}/${svc}"]) {
+                sh '''
+                  set -euo pipefail
+                  echo "🐳 Build: ${IMAGE_REPO}:${IMAGE_TAG}"
+                  cd "${WORKSPACE}/${svc}"
 
-                    EXTRA_DEST=""
-                    if [ "\${BRANCH_NAME:-}" = "main" ] || [ "\${BRANCH_NAME:-}" = "master" ]; then
-                      EXTRA_DEST="--destination \${IMAGE_REPO}:latest"
-                    fi
+                  # Asegurar login ya hecho previamente en el nodo Jenkins
+                  docker build -t "${IMAGE_REPO}:${IMAGE_TAG}" -t "${IMAGE_REPO}:latest" .
 
-                    test -f /kaniko/.docker/config.json || { echo "❌ Falta /kaniko/.docker/config.json"; exit 1; }
+                  echo "📤 Push: ${IMAGE_REPO}:${IMAGE_TAG}"
+                  docker push "${IMAGE_REPO}:${IMAGE_TAG}"
 
-                    /kaniko/executor \
-                      --context "${WORKSPACE}/${svc}" \
-                      --dockerfile "${WORKSPACE}/${svc}/Dockerfile" \
-                      --destination "\${IMAGE_REPO}:${IMAGE_TAG}" \
-                      \${EXTRA_DEST} \
-                      --snapshotMode=redo \
-                      --use-new-run
-                  """
-                }
+                  # Solo en main/master empujamos también latest (opcional)
+                  if [ "${BRANCH_NAME:-}" = "main" ] || [ "${BRANCH_NAME:-}" = "master" ]; then
+                    echo "📤 Push: ${IMAGE_REPO}:latest"
+                    docker push "${IMAGE_REPO}:latest"
+                  else
+                    echo "⏭️  Rama ${BRANCH_NAME:-} sin push de :latest"
+                  fi
+                '''
               }
             }
 
             if (params.DEPLOY && fileExists("${svc}/charts/Chart.yaml")) {
               stage("Deploy (Helm): ${svc}") {
-                container('kubectl-helm') {
-                  sh """
-                    set -euo pipefail
-                    echo "🚀 Helm deploy: ${svc} tag=${IMAGE_TAG}"
+                sh """
+                  set -euo pipefail
+                  echo "🚀 Helm deploy: ${svc} tag=${IMAGE_TAG}"
 
-                    kubectl create namespace microservicios --dry-run=client -o yaml | kubectl apply -f -
+                  kubectl create namespace microservicios --dry-run=client -o yaml | kubectl apply -f -
 
-                    cd "${WORKSPACE}/${svc}"
-                    helm dependency update charts/ || echo "Sin dependencias"
+                  cd "${WORKSPACE}/${svc}"
+                  helm dependency update charts/ || echo "Sin dependencias"
 
-                    helm upgrade --install ${svc} ./charts/ \
-                      --namespace microservicios \
-                      --set image.repository="${DOCKER_REGISTRY}/${svc}" \
-                      --set-string image.tag="${IMAGE_TAG}" \
-                      --set image.pullPolicy=Always \
-                      --wait --timeout=300s
+                  helm upgrade --install ${svc} ./charts/ \
+                    --namespace microservicios \
+                    --set image.repository="${DOCKER_REGISTRY}/${svc}" \
+                    --set-string image.tag="${IMAGE_TAG}" \
+                    --set image.pullPolicy=Always \
+                    --wait --timeout=300s
 
-                    echo "✅ Deployed: ${DOCKER_REGISTRY}/${svc}:${IMAGE_TAG}"
-                    kubectl -n microservicios get deploy,po,svc -l app=${svc} || true
-                  """
-                }
+                  echo "✅ Deployed: ${DOCKER_REGISTRY}/${svc}:${IMAGE_TAG}"
+                  kubectl -n microservicios get deploy,po,svc -l app=${svc} || true
+                """
               }
             } else {
               echo "⏭️  Despliegue omitido para ${svc} (DEPLOY=${params.DEPLOY}, chart=${fileExists(svc+'/charts/Chart.yaml')})"
             }
 
-            // pequeña pausa entre servicios para no estresar red/registro
-            sleep 2
+            sleep 2 // respirito entre servicios
           }
         }
       }
