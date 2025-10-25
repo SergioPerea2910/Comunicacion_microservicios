@@ -1,8 +1,8 @@
 replicaCount: 1
 
 image:
-  repository: usuarios-service
-  pullPolicy: IfNotPresent
+  repository: docker.io/rojassluu/usuarios-service
+  pullPolicy: Always
   tag: "latest"
 
 service:

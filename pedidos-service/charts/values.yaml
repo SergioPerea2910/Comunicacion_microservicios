@@ -1,8 +1,8 @@
 replicaCount: 1
 
 image:
-  repository: pedidos-service
-  pullPolicy: IfNotPresent
+  repository: docker.io/rojassluu/pedidos-service
+  pullPolicy: Always
   tag: "latest"
 
 service:
