@@ -120,6 +120,7 @@ spec:
               --context "${WORKSPACE}/${APP_DIR}" \
               --dockerfile "${WORKSPACE}/${APP_DIR}/Dockerfile" \
               --destination "${DOCKER_REGISTRY}/${APP_DIR}:${IMAGE_TAG}" \
+              --destination "${DOCKER_REGISTRY}/${SERVICE}:latest" \
               --snapshotMode=redo \
               --use-new-run
           '''
