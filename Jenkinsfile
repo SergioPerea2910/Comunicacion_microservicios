@@ -26,6 +26,13 @@ spec:
       volumeMounts:
         - name: docker-config
           mountPath: /kaniko/.docker
+   - name: kubectl-helm
+      image: alpine/helm:3.12.0
+      command: ['cat']
+      tty: true
+      volumeMounts:
+        - name: kubeconfig
+          mountPath: /root/.kube
   volumes:
     - name: m2-cache
       emptyDir: {}
@@ -37,6 +44,14 @@ spec:
               items:
                 - key: .dockerconfigjson
                   path: config.json
+    - name: kubeconfig
+      projected:
+        sources:
+          - secret:
+              name: kubeconfig-secret
+              items:
+                - key: config
+                  path: config
 """
     }
   }
@@ -112,6 +127,46 @@ spec:
         }
       }
     }
+
+  stage('Deploy with Helm to Minikube') {
+    when {
+      anyOf { branch 'main'; branch 'master'; branch 'develop' }
+    }
+    steps {
+      container('kubectl-helm') {
+        sh '''
+          echo "🚀 Iniciando despliegue con Helm en Minikube..."
+
+          # Verificar conexión a cluster
+          kubectl cluster-info
+
+          # Crear namespace si no existe
+          kubectl create namespace microservicios --dry-run=client -o yaml | kubectl apply -f -
+
+          # Cambiar al directorio del servicio
+          cd "${WORKSPACE}/${APP_DIR}"
+
+          # Actualizar dependencias del chart (si las hubiera)
+          helm dependency update charts/ || echo "No hay dependencias que actualizar"
+
+          # Desplegar con Helm
+          helm upgrade --install ${APP_DIR} ./charts/ \
+            --namespace microservicios \
+            --set image.repository="${DOCKER_REGISTRY}/${APP_DIR}" \
+            --set image.tag="${IMAGE_TAG}" \
+            --set image.pullPolicy=Always \
+            --wait \
+            --timeout=300s
+
+          # Verificar el despliegue
+          kubectl get pods -n microservicios -l app=${APP_DIR}
+          kubectl get svc -n microservicios -l app=${APP_DIR}
+
+          echo "✅ Despliegue completado exitosamente"
+        '''
+      }
+    }
+  }
 
   }
 
