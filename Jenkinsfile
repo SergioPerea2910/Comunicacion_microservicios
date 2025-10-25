@@ -152,9 +152,9 @@ spec:
           # Desplegar con Helm
           helm upgrade --install ${APP_DIR} ./charts/ \
             --namespace microservicios \
-            --set image.repository="${DOCKER_REGISTRY}/${APP_DIR}" \
-            --set image.tag="${IMAGE_TAG}" \
-            --set image.pullPolicy=Always \
+           --set image.repository="${DOCKER_REGISTRY}/${APP_DIR}" \
+           --set image.tag="${IMAGE_TAG}" \
+           --set image.pullPolicy=Always \
             --wait \
             --timeout=300s
 
