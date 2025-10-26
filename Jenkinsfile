@@ -84,8 +84,8 @@ stages {
               // !!!------ Build y empaquetado 
 			  
               container('maven') {
+				// !!!------Compilando ------!!!
                 sh '''
-                  // !!!------Compilando ------!!!
                   mvn -B -DskipTests clean package spring-boot:repackage
                   ls -lah target || true
                 '''
