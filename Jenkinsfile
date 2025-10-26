@@ -57,7 +57,6 @@ spec:
   }
 
   environment {
-    APP_DIR = 'gateway-service'
     DOCKER_REGISTRY = 'docker.io/rojassluu'
     IMAGE_TAG = "${env.BUILD_NUMBER}"
   }
@@ -82,23 +81,23 @@ stages {
             echo "!!!------ Iniciando pipeline para: ${micro} ------!!!"
             
             dir("${micro}") {
-              // Build y empaquetado
-			  echo "!!!------ Build y empaquetado para: ${micro} ------!!!"
+              // !!!------ Build y empaquetado 
+			  
               container('maven') {
                 sh '''
-                  echo "!!!------Compilando ${micro} ------!!!"
+                  // !!!------Compilando ------!!!
                   mvn -B -DskipTests clean package spring-boot:repackage
                   ls -lah target || true
                 '''
               }
-              // Archivado del artefacto
+              // !!!------ Archivado del artefacto
               archiveArtifacts artifacts: "target/*.jar", excludes: '**/*.original', fingerprint: true
 
-              // Construcción de imagen y push (si hay Dockerfile)
+              // !!!------ Construcción de imagen y push (si hay Dockerfile)
 			  
               if (fileExists("Dockerfile")) {
                 container('kaniko') {
-				  echo "!!!------Construcción de imagen y push ${micro} ------!!!"
+				 // !!!------Construcción de imagen y push
                   sh """
                     IMAGE_REPO="${DOCKER_REGISTRY}/${micro}"
                     /kaniko/executor \
@@ -112,9 +111,8 @@ stages {
                 }
               }
 
-              // Despliegue con Helm
+              // !!!------ Despliegue con Helm
               container('kubectl-helm') {
-			    echo "!!!------Despliegue con Helm para: ${micro} ------!!!"
                 sh """
                   kubectl create namespace microservicios --dry-run=client -o yaml | kubectl apply -f -
                   helm dependency update charts/ || echo "No hay dependencias"
