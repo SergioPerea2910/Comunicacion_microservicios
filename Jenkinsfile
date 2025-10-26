@@ -93,7 +93,6 @@ spec:
             }
             // Archivar artefacto
             archiveArtifacts artifacts: "${APP_DIR}/target/*.jar", excludes: '**/*.original', fingerprint: true
-
             // Docker Build & Push
             if (fileExists("${APP_DIR}/Dockerfile")) {
               container('kaniko') {
@@ -108,9 +107,10 @@ spec:
                 """
               }
             }
-            // Deploy con Helm
+            // Deploy con Helm (usa secreto kubeconfig si es pod)
             container('kubectl-helm') {
               sh """
+                export KUBECONFIG=/root/.kube/config || true
                 echo "🚀 Desplegando ${APP_DIR} con Helm..."
                 kubectl create namespace microservicios --dry-run=client -o yaml | kubectl apply -f -
                 cd "${WORKSPACE}/${APP_DIR}"
