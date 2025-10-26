@@ -109,9 +109,10 @@ spec:
             }
             // Deploy con Helm (usa secreto kubeconfig si es pod)
             container('kubectl-helm') {
+              //export KUBECONFIG=/root/.kube/config
               sh """
-                export KUBECONFIG=/root/.kube/config
                 echo "🚀 Desplegando ${APP_DIR} con Helm..."
+                export KUBECONFIG=/root/.kube/config
                 kubectl create namespace microservicios --dry-run=client -o yaml | kubectl apply -f -
                 cd "${WORKSPACE}/${APP_DIR}"
                 helm dependency update charts/ || echo "No hay dependencias que actualizar"
