@@ -114,8 +114,10 @@ stages {
               // !!!------ Despliegue con Helm
               container('kubectl-helm') {
                 sh """
+				  kubectl cluster-info
                   kubectl create namespace microservicios --dry-run=client -o yaml | kubectl apply -f -
-                  helm dependency update charts/ || echo "No hay dependencias"
+                  cd "${WORKSPACE}/${micro}"
+				  helm dependency update charts/ || echo "No hay dependencias"
                   helm upgrade --install ${micro} ./charts/ \
                     --namespace microservicios \
                     --set image.repository="${DOCKER_REGISTRY}/${micro}" \
@@ -125,6 +127,7 @@ stages {
                     --timeout=300s
                   kubectl get pods -n microservicios -l app=${micro}
                   kubectl get svc -n microservicios -l app=${micro}
+				  echo "✅ Despliegue completado exitosamente"
                 """
               }
             }
