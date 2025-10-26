@@ -58,6 +58,8 @@ spec:
 
   environment {
     APP_DIR = 'gateway-service'
+    APP_DIR = 'usuarios-service'
+    APP_DIR = 'pedidos-service'
     DOCKER_REGISTRY = 'docker.io/rojassluu'
     IMAGE_TAG = "${env.BUILD_NUMBER}"
   }
