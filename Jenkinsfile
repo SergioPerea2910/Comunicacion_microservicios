@@ -107,27 +107,7 @@ spec:
                 """
               }
             }
-            // Deploy con Helm (usa secreto kubeconfig si es pod)
-            container('kubectl-helm') {
-              
-              sh """
-                echo "🚀 Desplegando ${APP_DIR} con Helm..."
-                export KUBECONFIG=/home/jenkins/.kube/config
-                kubectl create namespace microservicios --dry-run=client -o yaml | kubectl apply -f -
-                cd "${WORKSPACE}/${APP_DIR}"
-                helm dependency update charts/ || echo "No hay dependencias que actualizar"
-                helm upgrade --install ${APP_DIR} ./charts/ \
-                  --namespace microservicios \
-                  --set image.repository="${DOCKER_REGISTRY}/${APP_DIR}" \
-                  --set image.tag="${IMAGE_TAG}" \
-                  --set image.pullPolicy=Always \
-                  --wait \
-                  --timeout=300s
-                kubectl get pods -n microservicios -l app=${APP_DIR}
-                kubectl get svc -n microservicios -l app=${APP_DIR}
-                echo "✅ Despliegue completado: ${APP_DIR}\\n"
-              """
-            }
+           
           }
         }
       }
