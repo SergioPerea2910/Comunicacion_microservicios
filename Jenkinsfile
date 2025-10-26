@@ -119,10 +119,7 @@ spec:
                     --verbosity=info
                 '''
               }
-            }
-
-
-            
+                        
             }
            
           }
