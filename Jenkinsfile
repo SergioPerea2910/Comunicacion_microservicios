@@ -13,28 +13,39 @@ spec:
       image: maven:3.9.9-eclipse-temurin-21
       command: ['cat']
       tty: true
+      workingDir: /home/jenkins/agent
       volumeMounts:
         - name: m2-cache
           mountPath: /root/.m2
+        - name: workspace-volume
+          mountPath: /home/jenkins/agent
     - name: kaniko
       image: gcr.io/kaniko-project/executor:debug
       command: ['/busybox/sh','-c']
       args: ['sleep 365d']
+      workingDir: /home/jenkins/agent
       env:
         - name: DOCKER_CONFIG
           value: /kaniko/.docker
       volumeMounts:
         - name: docker-config
           mountPath: /kaniko/.docker
+        - name: workspace-volume
+          mountPath: /home/jenkins/agent
     - name: kubectl-helm
       image: dtzar/helm-kubectl:3.12.0
       command: ['cat']
       tty: true
+      workingDir: /home/jenkins/agent
       volumeMounts:
         - name: kubeconfig
           mountPath: /root/.kube
+        - name: workspace-volume
+          mountPath: /home/jenkins/agent
   volumes:
     - name: m2-cache
+      emptyDir: {}
+    - name: workspace-volume
       emptyDir: {}
     - name: docker-config
       projected:
@@ -79,7 +90,6 @@ spec:
           def servicios = ['gateway-service', 'usuarios-service', 'pedidos-service']
           for (APP_DIR in servicios) {
             echo "▶️ Procesando: ${APP_DIR} ◀️"
-            // Build
             container('maven') {
               dir("${APP_DIR}") {
                 sh """
@@ -91,22 +101,14 @@ spec:
                 """
               }
             }
-            // Archivar artefacto
             archiveArtifacts artifacts: "${APP_DIR}/target/*.jar", excludes: '**/*.original', fingerprint: true
-            // Docker Build & Push
-           // Docker Build & Push
             if (fileExists("${APP_DIR}/Dockerfile")) {
               container('kaniko') {
                 sh """
-                  echo "🧩 Preparando entorno Kaniko..."
-                  mkdir -p /workspace
-            
-                  echo "📁 Contexto: ${WORKSPACE}/${APP_DIR}"
-                  echo "🧾 Dockerfile: ${WORKSPACE}/${APP_DIR}/Dockerfile"
-            
+                  echo "🧩 Ejecutando Kaniko en /home/jenkins/agent"
                   /kaniko/executor \
-                    --context "${WORKSPACE}/${APP_DIR}" \
-                    --dockerfile "Dockerfile" \
+                    --context "/home/jenkins/agent/${APP_DIR}" \
+                    --dockerfile "/home/jenkins/agent/${APP_DIR}/Dockerfile" \
                     --destination "${DOCKER_REGISTRY}/${APP_DIR}:${IMAGE_TAG}" \
                     --destination "${DOCKER_REGISTRY}/${APP_DIR}:latest" \
                     --snapshot-mode redo \
@@ -115,7 +117,6 @@ spec:
                 """
               }
             }
-          
           }
         }
       }
