@@ -97,8 +97,8 @@ spec:
             if (fileExists("${APP_DIR}/Dockerfile")) {
               container('kaniko') {
                 sh """
-                echo  "${WORKSPACE}" - "${DOCKER_REGISTRY} " - " ${APP_DIR}" - "${IMAGE_TAG}"
-                  /kaniko/executor \
+                sh 'mkdir -p /workspace'
+                /kaniko/executor \
                     --context "${WORKSPACE}/${APP_DIR}" \
                     --dockerfile "${WORKSPACE}/${APP_DIR}/Dockerfile" \
                     --destination "${DOCKER_REGISTRY}/${APP_DIR}:${IMAGE_TAG}" \
