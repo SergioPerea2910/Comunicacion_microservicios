@@ -107,7 +107,7 @@ spec:
                 sh """
                   echo "🧩 Ejecutando Kaniko en /home/jenkins/agent"
                   /kaniko/executor \
-                    --context "/home/jenkins/agent/${APP_DIR}" \
+                    --context "${WORKSPACE}/${APP_DIR}" \
                     --dockerfile "Dockerfile" \
                     --destination "${DOCKER_REGISTRY}/${APP_DIR}:${IMAGE_TAG}" \
                     --destination "${DOCKER_REGISTRY}/${APP_DIR}:latest" \
