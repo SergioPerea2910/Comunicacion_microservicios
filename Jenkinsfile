@@ -108,7 +108,7 @@ spec:
                   echo "🧩 Ejecutando Kaniko en /home/jenkins/agent"
                   /kaniko/executor \
                     --context "/home/jenkins/agent/${APP_DIR}" \
-                    --dockerfile "/home/jenkins/agent/${APP_DIR}/Dockerfile" \
+                    --dockerfile "Dockerfile" \
                     --destination "${DOCKER_REGISTRY}/${APP_DIR}:${IMAGE_TAG}" \
                     --destination "${DOCKER_REGISTRY}/${APP_DIR}:latest" \
                     --snapshot-mode redo \
