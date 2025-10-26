@@ -95,18 +95,34 @@ spec:
             archiveArtifacts artifacts: "${APP_DIR}/target/*.jar", excludes: '**/*.original', fingerprint: true
             // Docker Build & Push
             if (fileExists("${APP_DIR}/Dockerfile")) {
+              containerTemplate(
+                name: 'kaniko',
+                image: 'gcr.io/kaniko-project/executor:debug',
+                ttyEnabled: true,
+                command: '/busybox/cat',
+                workingDir: '/home/jenkins/agent/workspace',
+                args: '-u root' // opcional: asegura permisos sobre /workspace
+              )
               container('kaniko') {
-                sh """
-                mkdir -p /workspace
-                /kaniko/executor \
+                sh '''
+                  echo "🧩 Preparando entorno Kaniko..."
+                  mkdir -p /workspace
+                  echo "📁 Directorio de trabajo actual: $(pwd)"
+                  
+                  /kaniko/executor \
                     --context "${WORKSPACE}/${APP_DIR}" \
                     --dockerfile "${WORKSPACE}/${APP_DIR}/Dockerfile" \
                     --destination "${DOCKER_REGISTRY}/${APP_DIR}:${IMAGE_TAG}" \
                     --destination "${DOCKER_REGISTRY}/${APP_DIR}:latest" \
                     --snapshotMode=redo \
-                    --use-new-run
-                """
+                    --use-new-run \
+                    --verbosity=info
+                '''
               }
+            }
+
+
+            
             }
            
           }
