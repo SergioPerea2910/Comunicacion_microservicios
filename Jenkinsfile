@@ -109,6 +109,7 @@ spec:
             }
             // Deploy con Helm (usa secreto kubeconfig si es pod)
             container('kubectl-helm') {
+              
               sh """
                 echo "🚀 Desplegando ${APP_DIR} con Helm..."
                 export KUBECONFIG=/home/jenkins/.kube/config
