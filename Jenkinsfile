@@ -97,7 +97,7 @@ spec:
             if (fileExists("${APP_DIR}/Dockerfile")) {
               container('kaniko') {
                 sh """
-                sh 'mkdir -p /workspace'
+                mkdir -p /workspace
                 /kaniko/executor \
                     --context "${WORKSPACE}/${APP_DIR}" \
                     --dockerfile "${WORKSPACE}/${APP_DIR}/Dockerfile" \
