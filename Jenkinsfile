@@ -98,8 +98,8 @@ stages {
               if (fileExists("Dockerfile")) {
                 container('kaniko') {
 				 // !!!------Construcción de imagen y push
-                  sh """
-                    IMAGE_REPO="${DOCKER_REGISTRY}/${micro}"
+				IMAGE_REPO="${DOCKER_REGISTRY}/${micro}"
+                  sh """                    
                     /kaniko/executor \
                       --context "." \
                       --dockerfile "Dockerfile" \
